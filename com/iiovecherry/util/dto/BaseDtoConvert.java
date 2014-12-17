@@ -40,7 +40,8 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
     public EntityType getCreateEntity(DtoType dto) throws ClassNotFoundException, InstantiationException, IllegalAccessException {
         if (dto == null)
             throw new IllegalArgumentException("dto is null");
-        FieldHolder holder = new FieldHolder(dto.getClass(), 1);
+        boolean isProxy=checkIsProxy(dto);
+        FieldHolder holder = new FieldHolder(isProxy?dto.getClass().getSuperclass():dto.getClass(), 1);
         EntityType entity = (EntityType) getNewEntity(dto);
         if (checkListen())
             listener.beforeCreateEntity(entity, dto);
@@ -55,7 +56,8 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
     public EntityType initUpdateEntity(DtoType dto) throws ClassNotFoundException, IllegalArgumentException, IllegalAccessException {
         if (dto == null)
             throw new IllegalArgumentException("dto is null");
-        FieldHolder holder = new FieldHolder(dto.getClass(), 2);
+        boolean isProxy=checkIsProxy(dto);
+        FieldHolder holder = new FieldHolder(isProxy?dto.getClass().getSuperclass():dto.getClass(), 2);
         EntityType entity = (EntityType) getEntity(dto, holder, true);
         if (checkListen())
             listener.beforeUpdateEntity(entity, dto);
@@ -76,7 +78,12 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
             fd.setAccessible(true);
             Object oDto = fd.get(dto);
             Object oEntity = getEntityValue(oDto, fd, fe, holder);
-            if (oEntity != null) {
+            if(checkIsProxy(dto)){
+                ProxyDto proxy=(ProxyDto) dto;
+                if(proxy.checkChange(fd.getName())){
+                    fe.set(entity, oEntity);
+                }
+            }else if (oEntity != null) {
                 fe.set(entity, oEntity);
             }
         }
@@ -132,10 +139,10 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
         DtoType dto = myClass.newInstance();
         if (checkListen())
             listener.beforeCreateDto(entity, dto);
-
+        DtoType res= (DtoType) getDto(entity, dto, myClass, maxDept);
         if (checkListen())
             listener.afterCreateDto(entity, dto);
-        return (DtoType) getDto(entity, dto, myClass, maxDept);
+        return res;
     }
 
     private Object getDto(Object entity, Object dto, Class<?> myClass, int limit) throws ClassNotFoundException, InstantiationException, IllegalAccessException {
@@ -216,12 +223,13 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
     }
 
     @Override
-    public void initSearchCriteria(Criteria criteria, DtoType dto) throws ClassNotFoundException, IllegalArgumentException, IllegalAccessException {
+    public void initSearchCriteria(Criteria criteria, DtoType dto) throws ClassNotFoundException, IllegalArgumentException, IllegalAccessException {  
         if (dto == null || criteria == null)
             return;
         if (checkListen())
             listener.beforeSearch(criteria, dto);
-        FieldHolder holder = new FieldHolder(dto.getClass(), 3);
+        boolean isProxy=checkIsProxy(dto);
+        FieldHolder holder = new FieldHolder(isProxy?dto.getClass().getSuperclass():dto.getClass(), 3);
         if (holder.getDtoFields() == null || holder.getDtoFields().size() < 1) {
             if (checkListen())
                 listener.aftereSearch(criteria, dto);
@@ -237,11 +245,22 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
                 fd.setAccessible(true);
                 Object oDto = fd.get(dto);
                 Object oNew = typeToSearch(oDto, anno.dataType());
-                if (oNew == null)
+                boolean canNull=false;
+                if(isProxy){
+                    ProxyDto proxy=(ProxyDto) dto;
+                    if(proxy.checkChange(fd.getName())){
+                        canNull=anno.searchType()==0?true:false;
+                    }
+                }
+                if (oNew == null&&!canNull)
                     continue;
                 switch (anno.searchType()) {
                 case 0:
-                    criteria.add(Restrictions.eq(name, oNew));
+                    if(oNew==null){
+                        criteria.add(Restrictions.isNull(name));
+                    }else{
+                        criteria.add(Restrictions.eq(name, oNew));
+                    }
                     break;
                 case 1:
                     criteria.add(Restrictions.gt(name, oNew));
@@ -384,5 +403,21 @@ public class BaseDtoConvert<EntityType, DtoType> implements IDtoConvert<EntityTy
         String id = (String) idOb;
         return optDao == null ? null : optDao.get(entityName, id);
     }
-
+    /**
+     * Check DTO is proxy object or not
+     * @param dto
+     * @return
+     */
+    private boolean checkIsProxy(Object dto){
+        boolean res=false;
+        if(dto instanceof ProxyDto){
+            String proxyName=dto.getClass().getName();
+            String dtoName=dto.getClass().getSuperclass().getName();
+            if(proxyName.startsWith(dtoName+"$$")){
+               res=true;
+            }
+        }    
+        return res;
+    }
+    
 }
